@@ -15,6 +15,7 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="parent-mode" options={{ headerShown: false }} />
+        <Stack.Screen name="math-quest" options={{ headerShown: false }} />
       </Stack>
       <ChatbotButton />
     </>

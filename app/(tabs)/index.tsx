@@ -1,9 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { StyleSheet, View, Text, ScrollView, Pressable, StatusBar, Modal, TextInput, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import Svg, { Polygon, Line, Circle, Text as SvgText } from "react-native-svg";
+import { useFocusEffect } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { COLORS, SPACING, SHAPES, FONTS, SHADOWS } from "../../constants/Theme";
 import Robot3DView from "../../components/Robot3DView";
 import * as ImagePicker from "expo-image-picker";
@@ -12,6 +14,23 @@ import { useAuth } from "../../hooks/useAuth";
 
 export default function Index() {
   const { isLoggedIn, childName, updateChildName, avatarUrl, updateAvatarUrl } = useAuth();
+  const [userCoins, setUserCoins] = useState(1250);
+
+  useFocusEffect(
+    useCallback(() => {
+      const loadCoins = async () => {
+        try {
+          const val = await AsyncStorage.getItem("user_coins_balance");
+          if (val !== null) {
+            setUserCoins(parseInt(val));
+          }
+        } catch (e) {
+          console.error("Failed to load coins", e);
+        }
+      };
+      loadCoins();
+    }, [])
+  );
 
   // Name Editing States
   const [nameModalVisible, setNameModalVisible] = useState(false);
@@ -233,7 +252,7 @@ export default function Index() {
       <View style={styles.hudRow}>
         <View style={styles.hudBadge}>
           <MaterialCommunityIcons name="coins" size={14} color="#F59E0B" />
-          <Text style={[styles.hudBadgeText, { color: "#D97706" }]}>1.250</Text>
+          <Text style={[styles.hudBadgeText, { color: "#D97706" }]}>{userCoins.toLocaleString("id-ID")}</Text>
         </View>
         
         <View style={[styles.hudBadge, { backgroundColor: "#EFF6FF", borderColor: "#DBEAFE" }]}>

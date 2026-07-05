@@ -1,8 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { StyleSheet, View, Text, ScrollView, Pressable, StatusBar, FlatList, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
+import { useRouter, useFocusEffect } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { COLORS, SPACING, SHAPES, FONTS, SHADOWS } from "../../constants/Theme";
 import { useAuth } from "../../hooks/useAuth";
 
@@ -18,7 +20,25 @@ interface GameItem {
 
 export default function PlayScreen() {
   const { isLoggedIn } = useAuth();
+  const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<string>("Semua");
+  const [userCoins, setUserCoins] = useState(1250);
+
+  useFocusEffect(
+    useCallback(() => {
+      const loadCoins = async () => {
+        try {
+          const val = await AsyncStorage.getItem("user_coins_balance");
+          if (val !== null) {
+            setUserCoins(parseInt(val));
+          }
+        } catch (e) {
+          console.error("Failed to load coins", e);
+        }
+      };
+      loadCoins();
+    }, [])
+  );
 
   const categories = ["Semua", "Kognitif", "Moral", "Literasi", "Fokus"];
 
@@ -79,7 +99,9 @@ export default function PlayScreen() {
           if (item.isLocked) {
             alert("Misi game ini masih terkunci! Selesaikan misi sebelumnya.");
           } else {
-            if (!isLoggedIn) {
+            if (item.id === "math_quest") {
+              router.push("/math-quest");
+            } else if (!isLoggedIn) {
               Alert.alert(
                 "Harap Login Dahulu",
                 "Anda belum login. Silakan login terlebih dahulu untuk menyimpan progres belajar anak.",
@@ -150,7 +172,7 @@ export default function PlayScreen() {
         {/* Coins HUD Badge */}
         <View style={styles.coinsHud}>
           <MaterialCommunityIcons name="coins" size={18} color="#F59E0B" />
-          <Text style={styles.coinsHudText}>1.250</Text>
+          <Text style={styles.coinsHudText}>{userCoins.toLocaleString("id-ID")}</Text>
         </View>
       </View>
 
