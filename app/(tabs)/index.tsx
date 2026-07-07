@@ -15,20 +15,27 @@ import { useAuth } from "../../hooks/useAuth";
 export default function Index() {
   const { isLoggedIn, childName, updateChildName, avatarUrl, updateAvatarUrl } = useAuth();
   const [userCoins, setUserCoins] = useState(1250);
+  const [childLevel, setChildLevel] = useState(12);
 
   useFocusEffect(
     useCallback(() => {
-      const loadCoins = async () => {
+      const loadData = async () => {
         try {
           const val = await AsyncStorage.getItem("user_coins_balance");
           if (val !== null) {
             setUserCoins(parseInt(val));
           }
+          const storedLevel = await AsyncStorage.getItem("robot_escape_current_level");
+          if (storedLevel !== null) {
+            setChildLevel(11 + parseInt(storedLevel));
+          } else {
+            setChildLevel(12);
+          }
         } catch (e) {
-          console.error("Failed to load coins", e);
+          console.error("Failed to load dashboard data", e);
         }
       };
-      loadCoins();
+      loadData();
     }, [])
   );
 
@@ -243,7 +250,7 @@ export default function Index() {
                 <Ionicons name="pencil-sharp" size={12} color={COLORS.textMedium} style={{ opacity: 0.6, marginTop: 2 }} />
               )}
             </View>
-            <Text style={styles.levelText}>Level 12 • Junior Explorer</Text>
+            <Text style={styles.levelText}>Level {childLevel} • Junior Explorer</Text>
           </Pressable>
         </View>
       </View>

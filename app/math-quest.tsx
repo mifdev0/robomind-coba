@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import {
   StyleSheet,
   View,
   Text,
   Pressable,
-  Animated,
   StatusBar,
   ScrollView,
   Platform,
+  Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
@@ -15,6 +15,17 @@ import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
+import { GestureHandlerRootView, GestureDetector, Gesture } from "react-native-gesture-handler";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+  withDelay,
+  withRepeat,
+  cancelAnimation,
+} from "react-native-reanimated";
 import { COLORS, SPACING, SHAPES, FONTS, SHADOWS } from "../constants/Theme";
 import Button from "../components/ui/Button";
 
@@ -83,7 +94,7 @@ const QUEST_LEVELS: QuestConfig[] = [
     subtitle: "Perkalian, Pembagian & Variabel",
     difficulty: "Sulit",
     reward: 150,
-    icon: "nuclear",
+    icon: "radiation",
     color: COLORS.brandOrange,
     questions: [
       { question: "7 x 8 = ?", options: ["54", "56", "58", "60"], answer: "56" },
@@ -134,13 +145,122 @@ export default function MathQuestScreen() {
   const [robotSpeech, setRobotSpeech] = useState(ROBOT_MESSAGES.intro);
   const [userCoins, setUserCoins] = useState(1250);
 
-  // Animations
-  const batteryAnim = useRef(new Animated.Value(40)).current;
-  const robotShakeAnim = useRef(new Animated.Value(0)).current;
-  const robotBounceAnim = useRef(new Animated.Value(0)).current;
-  const feedbackOpacity = useRef(new Animated.Value(0)).current;
-  const feedbackTranslateY = useRef(new Animated.Value(0)).current;
-  const timerAnim = useRef(new Animated.Value(1)).current;
+  // --- REANIMATED SHARED VALUES ---
+  const batteryLevelShared = useSharedValue(40);
+  const timerProgress = useSharedValue(1);
+
+  const robotTranslateX = useSharedValue(0);
+  const robotTranslateY = useSharedValue(0);
+  const robotScale = useSharedValue(1);
+  const robotRotate = useSharedValue(0);
+
+  // --- GESTURE DRAG SHARED VALUES ---
+  const dragX = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  const contextX = useSharedValue(0);
+  const contextY = useSharedValue(0);
+
+  const feedbackOpacity = useSharedValue(0);
+  const feedbackTranslateY = useSharedValue(20);
+
+  const particleX = [useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0)];
+  const particleY = [useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0)];
+  const particleOpacity = [useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0), useSharedValue(0)];
+
+  const [showParticles, setShowParticles] = useState(false);
+
+  // --- REANIMATED ANIMATED STYLES ---
+  const batteryStyle = useAnimatedStyle(() => ({
+    width: `${batteryLevelShared.value}%`,
+  }));
+
+  const timerStyle = useAnimatedStyle(() => ({
+    width: `${timerProgress.value * 100}%`,
+  }));
+
+  const robotAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: robotTranslateX.value + dragX.value },
+      { translateY: robotTranslateY.value + dragY.value },
+      { scale: robotScale.value },
+      { rotate: `${robotRotate.value}deg` },
+    ],
+  }));
+
+  const feedbackStyle = useAnimatedStyle(() => ({
+    opacity: feedbackOpacity.value,
+    transform: [{ translateY: feedbackTranslateY.value }],
+  }));
+
+  // Statically define styles for the 5 particles to satisfy Hook rules
+  const particleStyle0 = useAnimatedStyle(() => ({
+    opacity: particleOpacity[0].value,
+    transform: [{ translateX: particleX[0].value }, { translateY: particleY[0].value }],
+  }));
+  const particleStyle1 = useAnimatedStyle(() => ({
+    opacity: particleOpacity[1].value,
+    transform: [{ translateX: particleX[1].value }, { translateY: particleY[1].value }],
+  }));
+  const particleStyle2 = useAnimatedStyle(() => ({
+    opacity: particleOpacity[2].value,
+    transform: [{ translateX: particleX[2].value }, { translateY: particleY[2].value }],
+  }));
+  const particleStyle3 = useAnimatedStyle(() => ({
+    opacity: particleOpacity[3].value,
+    transform: [{ translateX: particleX[3].value }, { translateY: particleY[3].value }],
+  }));
+  const particleStyle4 = useAnimatedStyle(() => ({
+    opacity: particleOpacity[4].value,
+    transform: [{ translateX: particleX[4].value }, { translateY: particleY[4].value }],
+  }));
+
+  const particleStyles = [particleStyle0, particleStyle1, particleStyle2, particleStyle3, particleStyle4];
+
+  // --- GESTURE PAN DRAG HANDLER ---
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      contextX.value = dragX.value;
+      contextY.value = dragY.value;
+      // Cancel idle loops while dragging
+      cancelAnimation(robotTranslateY);
+      cancelAnimation(robotScale);
+      cancelAnimation(robotRotate);
+    })
+    .onUpdate((event) => {
+      dragX.value = contextX.value + event.translationX;
+      dragY.value = contextY.value + event.translationY;
+    })
+    .onEnd(() => {
+      // Bouncy snap back to origin
+      dragX.value = withSpring(0, { damping: 12 });
+      dragY.value = withSpring(0, { damping: 12 });
+      
+      // Resume idle loops
+      robotTranslateY.value = withRepeat(
+        withSequence(
+          withTiming(-8, { duration: 1800 }),
+          withTiming(8, { duration: 1800 })
+        ),
+        -1,
+        true
+      );
+      robotScale.value = withRepeat(
+        withSequence(
+          withTiming(1.03, { duration: 2000 }),
+          withTiming(0.97, { duration: 2000 })
+        ),
+        -1,
+        true
+      );
+      robotRotate.value = withRepeat(
+        withSequence(
+          withTiming(3, { duration: 2200 }),
+          withTiming(-3, { duration: 2200 })
+        ),
+        -1,
+        true
+      );
+    });
 
   // Sound/Haptic feedback helper
   const triggerHaptic = (type: "success" | "error" | "light") => {
@@ -190,11 +310,7 @@ export default function MathQuestScreen() {
     }, 1000);
 
     // Animate timer progress bar
-    Animated.timing(timerAnim, {
-      toValue: timeLeft / 15,
-      duration: 1000,
-      useNativeDriver: false,
-    }).start();
+    timerProgress.value = withTiming(timeLeft / 15, { duration: 1000 });
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,50 +318,155 @@ export default function MathQuestScreen() {
 
   // Battery bar animation
   useEffect(() => {
-    Animated.spring(batteryAnim, {
-      toValue: batteryLevel,
-      useNativeDriver: false,
-    }).start();
-  }, [batteryLevel, batteryAnim]);
+    batteryLevelShared.value = withSpring(batteryLevel, { damping: 15 });
+  }, [batteryLevel, batteryLevelShared]);
 
-  // Robot idle bounce animation
+  // Robot idle loop (Breathing, Floating, Swaying)
   useEffect(() => {
-    const bounce = Animated.loop(
-      Animated.sequence([
-        Animated.timing(robotBounceAnim, {
-          toValue: -6,
-          duration: 1500,
-          useNativeDriver: true,
-        }),
-        Animated.timing(robotBounceAnim, {
-          toValue: 0,
-          duration: 1500,
-          useNativeDriver: true,
-        }),
-      ])
+    if (selectedAnswer === null && (gameState === "playing" || gameState === "intro")) {
+      // 1. Floating (Y-axis float bounce)
+      robotTranslateY.value = withRepeat(
+        withSequence(
+          withTiming(-8, { duration: 1800 }),
+          withTiming(8, { duration: 1800 })
+        ),
+        -1,
+        true
+      );
+
+      // 2. Breathing (scale pulsing)
+      robotScale.value = withRepeat(
+        withSequence(
+          withTiming(1.03, { duration: 2000 }),
+          withTiming(0.97, { duration: 2000 })
+        ),
+        -1,
+        true
+      );
+
+      // 3. Swaying (rotation)
+      robotRotate.value = withRepeat(
+        withSequence(
+          withTiming(3, { duration: 2200 }),
+          withTiming(-3, { duration: 2200 })
+        ),
+        -1,
+        true
+      );
+    } else {
+      cancelAnimation(robotTranslateY);
+      cancelAnimation(robotScale);
+      cancelAnimation(robotRotate);
+    }
+
+    return () => {
+      cancelAnimation(robotTranslateY);
+      cancelAnimation(robotScale);
+      cancelAnimation(robotRotate);
+    };
+  }, [gameState, selectedAnswer, robotTranslateY, robotScale, robotRotate]);
+
+  // Cartoon Active Animations
+  const playVictoryAnimation = () => {
+    cancelAnimation(robotTranslateY);
+    cancelAnimation(robotScale);
+    cancelAnimation(robotRotate);
+    
+    robotRotate.value = 0;
+    
+    // Squash & Stretch, Jump, Spin
+    robotScale.value = withSequence(
+      withTiming(0.82, { duration: 100 }),
+      withTiming(1.25, { duration: 300 }),
+      withTiming(0.88, { duration: 250 }),
+      withSpring(1, { damping: 12 })
     );
-    bounce.start();
-    return () => bounce.stop();
-  }, [robotBounceAnim]);
 
-  const shakeRobot = () => {
-    Animated.sequence([
-      Animated.timing(robotShakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-      Animated.timing(robotShakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-      Animated.timing(robotShakeAnim, { toValue: 8, duration: 50, useNativeDriver: true }),
-      Animated.timing(robotShakeAnim, { toValue: -8, duration: 50, useNativeDriver: true }),
-      Animated.timing(robotShakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-    ]).start();
+    robotTranslateY.value = withSequence(
+      withTiming(12, { duration: 100 }),
+      withTiming(-65, { duration: 300 }),
+      withTiming(0, { duration: 250 }),
+      withSpring(0, { damping: 12 })
+    );
+
+    robotRotate.value = withTiming(360, { duration: 450 });
   };
 
-  const pulseRobot = () => {
-    Animated.sequence([
-      Animated.timing(robotBounceAnim, { toValue: -15, duration: 150, useNativeDriver: true }),
-      Animated.timing(robotBounceAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
-    ]).start();
+  const playDamageAnimation = () => {
+    cancelAnimation(robotTranslateY);
+    cancelAnimation(robotScale);
+    cancelAnimation(robotRotate);
+    cancelAnimation(robotTranslateX);
+    
+    robotTranslateX.value = 0;
+    
+    robotScale.value = withSequence(
+      withTiming(0.85, { duration: 80 }),
+      withDelay(340, withSpring(1))
+    );
+
+    robotRotate.value = withSequence(
+      withTiming(-15, { duration: 80 }),
+      withDelay(340, withSpring(0))
+    );
+
+    robotTranslateX.value = withSequence(
+      withTiming(-15, { duration: 40 }),
+      withTiming(15, { duration: 60 }),
+      withTiming(-12, { duration: 60 }),
+      withTiming(12, { duration: 60 }),
+      withTiming(-8, { duration: 60 }),
+      withTiming(8, { duration: 60 }),
+      withSpring(0)
+    );
   };
 
-  // Get random questions from level config
+  const emitParticles = () => {
+    setShowParticles(true);
+    const { width: sw, height: sh } = Dimensions.get("window");
+    
+    // Start at bottom center (where the choice buttons are)
+    const startX = sw / 2 - 12; // Adjusted for particle width
+    const startY = sh - 280;
+    
+    // Target at top-left/center (near battery bar HUD)
+    const targetX = 80;
+    const targetY = 32;
+
+    for (let i = 0; i < 5; i++) {
+      const randX = startX + (Math.random() - 0.5) * 100;
+      const randY = startY + (Math.random() - 0.5) * 50;
+
+      particleX[i].value = randX;
+      particleY[i].value = randY;
+      particleOpacity[i].value = 0;
+
+      const delayTime = i * 100;
+
+      particleOpacity[i].value = withDelay(
+        delayTime,
+        withSequence(
+          withTiming(1, { duration: 80 }),
+          withDelay(450, withTiming(0, { duration: 250 }))
+        )
+      );
+
+      particleX[i].value = withDelay(
+        delayTime,
+        withTiming(targetX, { duration: 650 })
+      );
+
+      particleY[i].value = withDelay(
+        delayTime,
+        withTiming(targetY, { duration: 650 })
+      );
+    }
+
+    setTimeout(() => {
+      setShowParticles(false);
+    }, 1200);
+  };
+
   const startQuest = (quest: QuestConfig) => {
     triggerHaptic("light");
     setSelectedQuest(quest);
@@ -270,14 +491,14 @@ export default function MathQuestScreen() {
     setIsCorrect(false);
     setSelectedAnswer("WAKTU_HABIS");
     setRobotSpeech(ROBOT_MESSAGES.timeout);
-    shakeRobot();
+    playDamageAnimation();
     
     // Reduce battery
     const nextBattery = Math.max(0, batteryLevel - 10);
     setBatteryLevel(nextBattery);
 
     // Show floating error feedback
-    showFloatingFeedback("-10%");
+    showFloatingFeedback();
 
     setTimeout(() => {
       if (nextBattery <= 0) {
@@ -300,7 +521,8 @@ export default function MathQuestScreen() {
     
     if (correct) {
       triggerHaptic("success");
-      pulseRobot();
+      playVictoryAnimation();
+      emitParticles();
       
       const randomMsg = ROBOT_MESSAGES.correct[Math.floor(Math.random() * ROBOT_MESSAGES.correct.length)];
       
@@ -315,7 +537,7 @@ export default function MathQuestScreen() {
         setRobotSpeech(randomMsg);
       }
       
-      showFloatingFeedback("+20%");
+      showFloatingFeedback();
       
       setTimeout(() => {
         if (nextBattery >= 100) {
@@ -326,7 +548,7 @@ export default function MathQuestScreen() {
       }, 1500);
     } else {
       triggerHaptic("error");
-      shakeRobot();
+      playDamageAnimation();
       
       const randomMsg = ROBOT_MESSAGES.incorrect[Math.floor(Math.random() * ROBOT_MESSAGES.incorrect.length)];
       setRobotSpeech(randomMsg);
@@ -334,7 +556,7 @@ export default function MathQuestScreen() {
       const nextBattery = Math.max(0, batteryLevel - 10);
       setBatteryLevel(nextBattery);
       
-      showFloatingFeedback("-10%");
+      showFloatingFeedback();
       
       setTimeout(() => {
         if (nextBattery <= 0) {
@@ -347,29 +569,15 @@ export default function MathQuestScreen() {
     }
   };
 
-  const showFloatingFeedback = (text: string) => {
-    feedbackTranslateY.setValue(20);
-    feedbackOpacity.setValue(0);
+  const showFloatingFeedback = () => {
+    feedbackTranslateY.value = 20;
+    feedbackOpacity.value = 0;
     
-    Animated.parallel([
-      Animated.timing(feedbackOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(feedbackTranslateY, {
-        toValue: -20,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      Animated.timing(feedbackOpacity, {
-        toValue: 0,
-        duration: 300,
-        delay: 500,
-        useNativeDriver: true,
-      }).start();
-    });
+    feedbackOpacity.value = withSequence(
+      withTiming(1, { duration: 200 }),
+      withDelay(500, withTiming(0, { duration: 300 }))
+    );
+    feedbackTranslateY.value = withTiming(-20, { duration: 500 });
   };
 
   const nextQuestion = () => {
@@ -414,11 +622,17 @@ export default function MathQuestScreen() {
     return (
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         <View style={styles.introHeader}>
-          <Image
-            source={require("../assets/images/modul_robot.png")}
-            style={styles.introRobotImage}
-            contentFit="contain"
-          />
+          <GestureDetector gesture={panGesture}>
+            <Animated.View 
+              style={[robotAnimatedStyle, { cursor: "grab" } as any]}
+            >
+              <Image
+                source={require("../assets/images/modul_robot.png")}
+                style={styles.introRobotImage}
+                contentFit="contain"
+              />
+            </Animated.View>
+          </GestureDetector>
           <Text style={styles.introTitle}>MATH QUEST</Text>
           <Text style={styles.introSubtitle}>Bantu robot mengisi energi baterai dengan belajar matematika!</Text>
         </View>
@@ -450,7 +664,7 @@ export default function MathQuestScreen() {
               <Text style={styles.questSubtitle}>{quest.subtitle}</Text>
               
               <View style={styles.rewardRow}>
-                <MaterialCommunityIcons name="coins" size={16} color="#F59E0B" />
+                <MaterialCommunityIcons name="coin" size={16} color="#F59E0B" />
                 <Text style={styles.rewardText}>+{quest.reward} Koin</Text>
               </View>
             </View>
@@ -495,13 +709,8 @@ export default function MathQuestScreen() {
               <Animated.View 
                 style={[
                   styles.batteryInner, 
-                  { 
-                    width: batteryAnim.interpolate({
-                      inputRange: [0, 100],
-                      outputRange: ["0%", "100%"]
-                    }),
-                    backgroundColor: getBatteryColor()
-                  }
+                  batteryStyle,
+                  { backgroundColor: getBatteryColor() }
                 ]} 
               />
             </View>
@@ -511,10 +720,7 @@ export default function MathQuestScreen() {
             <Animated.View
               style={[
                 styles.floatingFeedback,
-                {
-                  opacity: feedbackOpacity,
-                  transform: [{ translateY: feedbackTranslateY }],
-                }
+                feedbackStyle
               ]}
             >
               <Text 
@@ -530,7 +736,7 @@ export default function MathQuestScreen() {
 
           {/* Coin Score */}
           <View style={styles.hudCoins}>
-            <MaterialCommunityIcons name="coins" size={16} color="#F59E0B" />
+            <MaterialCommunityIcons name="coin" size={16} color="#F59E0B" />
             <Text style={styles.hudCoinsText}>{userCoins}</Text>
           </View>
         </View>
@@ -540,13 +746,8 @@ export default function MathQuestScreen() {
           <Animated.View 
             style={[
               styles.timerBar, 
-              { 
-                backgroundColor: timerColor,
-                width: timerAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: ["0%", "100%"]
-                })
-              }
+              timerStyle,
+              { backgroundColor: timerColor }
             ]} 
           />
         </View>
@@ -554,7 +755,7 @@ export default function MathQuestScreen() {
         <ScrollView contentContainerStyle={styles.gameplayScroll} showsVerticalScrollIndicator={false}>
           {/* Robot Dialogue & Image */}
           <View style={styles.robotArea}>
-            <Animated.View 
+            <View 
               style={[
                 styles.robotBubble, 
                 { 
@@ -564,22 +765,19 @@ export default function MathQuestScreen() {
             >
               <View style={styles.robotBubbleTail} />
               <Text style={styles.robotBubbleText}>{robotSpeech}</Text>
-            </Animated.View>
+            </View>
 
-            <Animated.View 
-              style={{ 
-                transform: [
-                  { translateX: robotShakeAnim }, 
-                  { translateY: robotBounceAnim }
-                ] 
-              }}
-            >
-              <Image
-                source={require("../assets/images/robomind_hero.png")}
-                style={styles.robotGameplayImage}
-                contentFit="contain"
-              />
-            </Animated.View>
+            <GestureDetector gesture={panGesture}>
+              <Animated.View 
+                style={[robotAnimatedStyle, { cursor: "grab" } as any]}
+              >
+                <Image
+                  source={require("../assets/images/robomind_hero.png")}
+                  style={styles.robotGameplayImage}
+                  contentFit="contain"
+                />
+              </Animated.View>
+            </GestureDetector>
           </View>
 
           {/* Question Card */}
@@ -648,7 +846,7 @@ export default function MathQuestScreen() {
           <View style={styles.rewardSummary}>
             <Text style={styles.rewardTitle}>HADIAH PETUALANGAN</Text>
             <View style={styles.rewardBadgeBig}>
-              <MaterialCommunityIcons name="coins" size={24} color="#F59E0B" />
+              <MaterialCommunityIcons name="coin" size={24} color="#F59E0B" />
               <Text style={styles.rewardBadgeTextBig}>+{coinsReward} Koin</Text>
             </View>
           </View>
@@ -710,36 +908,55 @@ export default function MathQuestScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
-      
-      {/* Top Navigation Header for intro page */}
-      {gameState === "intro" && (
-        <View style={styles.mainHeader}>
-          <Pressable 
-            onPress={() => {
-              triggerHaptic("light");
-              router.back();
-            }}
-            style={styles.backButton}
-          >
-            <Ionicons name="arrow-back" size={24} color={COLORS.textDark} />
-          </Pressable>
-          <Text style={styles.mainHeaderTitle}>Math Quest</Text>
-          
-          <View style={styles.coinsHeaderBadge}>
-            <MaterialCommunityIcons name="coins" size={16} color="#F59E0B" />
-            <Text style={styles.coinsHeaderVal}>{userCoins}</Text>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
+        <StatusBar barStyle="dark-content" backgroundColor="#F9FAFB" />
+        
+        {/* Top Navigation Header for intro page */}
+        {gameState === "intro" && (
+          <View style={styles.mainHeader}>
+            <Pressable 
+              onPress={() => {
+                triggerHaptic("light");
+                router.back();
+              }}
+              style={styles.backButton}
+            >
+              <Ionicons name="arrow-back" size={24} color={COLORS.textDark} />
+            </Pressable>
+            <Text style={styles.mainHeaderTitle}>Math Quest</Text>
+            
+            <View style={styles.coinsHeaderBadge}>
+              <MaterialCommunityIcons name="coin" size={16} color="#F59E0B" />
+              <Text style={styles.coinsHeaderVal}>{userCoins}</Text>
+            </View>
           </View>
-        </View>
-      )}
+        )}
 
-      {/* Screen Dispatcher */}
-      {gameState === "intro" && renderIntro()}
-      {gameState === "playing" && renderPlaying()}
-      {gameState === "success" && renderSuccess()}
-      {gameState === "failed" && renderFailed()}
-    </SafeAreaView>
+        {/* Screen Dispatcher */}
+        {gameState === "intro" && renderIntro()}
+        {gameState === "playing" && renderPlaying()}
+        {gameState === "success" && renderSuccess()}
+        {gameState === "failed" && renderFailed()}
+
+        {/* Floating Particles Overlay */}
+        {showParticles && (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {particleStyles.map((style, index) => (
+              <Animated.View
+                key={index}
+                style={[
+                  styles.particle,
+                  style,
+                ]}
+              >
+                <MaterialCommunityIcons name="flash" size={12} color="#00C3A0" />
+              </Animated.View>
+            ))}
+          </View>
+        )}
+      </SafeAreaView>
+    </GestureHandlerRootView>
   );
 }
 
@@ -1227,5 +1444,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: SPACING.md,
     width: "100%",
+  },
+  particle: {
+    position: "absolute",
+    width: 24,
+    height: 24,
+    backgroundColor: "#E6FBF7",
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#00C3A0",
+    justifyContent: "center",
+    alignItems: "center",
+    ...SHADOWS.light,
+    zIndex: 999,
   },
 });

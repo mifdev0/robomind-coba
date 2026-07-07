@@ -9,9 +9,19 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.warn("Supabase URL or Anon Key is missing from environment variables!");
 }
 
+// Guard storage against SSR / Node environments where window is not defined
+const isServer = typeof window === "undefined";
+const storageAdapter = isServer
+  ? {
+      getItem: () => Promise.resolve(null),
+      setItem: () => Promise.resolve(),
+      removeItem: () => Promise.resolve(),
+    }
+  : AsyncStorage;
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: AsyncStorage,
+    storage: storageAdapter,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,

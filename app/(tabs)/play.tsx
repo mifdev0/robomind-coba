@@ -23,20 +23,30 @@ export default function PlayScreen() {
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState<string>("Semua");
   const [userCoins, setUserCoins] = useState(1250);
+  const [robotEscapeLevel, setRobotEscapeLevel] = useState(1);
+  const [robotCircuitLevel, setRobotCircuitLevel] = useState(1);
 
   useFocusEffect(
     useCallback(() => {
-      const loadCoins = async () => {
+      const loadData = async () => {
         try {
           const val = await AsyncStorage.getItem("user_coins_balance");
           if (val !== null) {
             setUserCoins(parseInt(val));
           }
+          const storedLevel = await AsyncStorage.getItem("robot_escape_current_level");
+          if (storedLevel !== null) {
+            setRobotEscapeLevel(parseInt(storedLevel));
+          }
+          const storedCircuitLevel = await AsyncStorage.getItem("robot_circuit_current_level");
+          if (storedCircuitLevel !== null) {
+            setRobotCircuitLevel(parseInt(storedCircuitLevel));
+          }
         } catch (e) {
-          console.error("Failed to load coins", e);
+          console.error("Failed to load play screen data", e);
         }
       };
-      loadCoins();
+      loadData();
     }, [])
   );
 
@@ -68,11 +78,20 @@ export default function PlayScreen() {
       coinsReward: 200,
     },
     {
+      id: "robot_circuit_puzzle",
+      title: "Robot Circuit",
+      category: "Kognitif",
+      image: require("../../assets/images/modul_coding.png"), // Reuse coding module or similar image
+      levelInfo: `Level ${robotCircuitLevel}`,
+      coinsReward: 200,
+      isLocked: false,
+    },
+    {
       id: "problem_solving",
-      title: "Problem Solving",
+      title: "Robot Escape",
       category: "Fokus",
-      image: require("../../assets/images/robomind_hero.png"),
-      levelInfo: "Level 5",
+      image: require("../../assets/images/game_robot_escape.png"),
+      levelInfo: `Level ${robotEscapeLevel}`,
       coinsReward: 180,
       isLocked: false,
     },
@@ -101,6 +120,10 @@ export default function PlayScreen() {
           } else {
             if (item.id === "math_quest") {
               router.push("/math-quest");
+            } else if (item.id === "problem_solving") {
+              router.push("/robot-escape");
+            } else if (item.id === "robot_circuit_puzzle") {
+              router.push("/robot-circuit-puzzle");
             } else if (!isLoggedIn) {
               Alert.alert(
                 "Harap Login Dahulu",
