@@ -1519,11 +1519,26 @@ export default function RobotEscapeScreen() {
 
       {/* HEADER SECTION (Nyawa, Level, Koin) */}
       <View style={styles.header}>
-        {/* Nyawa Hearts */}
-        <View style={styles.heartsRow}>
-          <Ionicons name="heart" size={22} color="#EF4444" />
-          <Ionicons name="heart" size={22} color="#EF4444" />
-          <Ionicons name="heart" size={22} color="#EF4444" />
+        {/* Tombol Back & Nyawa Hearts */}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Pressable
+            onPress={() => {
+              triggerHaptic("light");
+              router.back();
+            }}
+            style={({ pressed }) => [
+              styles.backBtn,
+              pressed && { opacity: 0.7 }
+            ]}
+          >
+            <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+          </Pressable>
+
+          <View style={styles.heartsRow}>
+            <Ionicons name="heart" size={22} color="#EF4444" />
+            <Ionicons name="heart" size={22} color="#EF4444" />
+            <Ionicons name="heart" size={22} color="#EF4444" />
+          </View>
         </View>
 
         {/* Level Badges & Reset Progress Button */}
@@ -2535,6 +2550,14 @@ const styles = StyleSheet.create({
     color: "#D97706",
   },
   resetBtn: {
+    backgroundColor: "rgba(30, 41, 59, 0.8)",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  backBtn: {
     backgroundColor: "rgba(30, 41, 59, 0.8)",
     width: 32,
     height: 32,
