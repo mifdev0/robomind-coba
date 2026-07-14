@@ -19,6 +19,7 @@ import Animated, {
   withTiming,
   withSequence,
   withRepeat,
+  runOnJS,
 } from "react-native-reanimated";
 import Svg, { Line, Circle, Path, Rect, G } from "react-native-svg";
 import { COLORS, SPACING, SHAPES, FONTS, SHADOWS } from "../constants/Theme";
@@ -53,6 +54,7 @@ interface LevelConfig {
   rewardCoins: number;
   rewardXP: number;
   instructions: string;
+  timeLimit: number; // in seconds
 }
 
 const LEVEL_CONFIGS: LevelConfig[] = [
@@ -76,6 +78,7 @@ const LEVEL_CONFIGS: LevelConfig[] = [
     rewardCoins: 50,
     rewardXP: 30,
     instructions: "Ketuk segmen kabel papan sirkuit untuk memutarnya. Sambungkan Robot ke PC Target!",
+    timeLimit: 30,
   },
   {
     level: 2,
@@ -99,6 +102,7 @@ const LEVEL_CONFIGS: LevelConfig[] = [
     rewardCoins: 75,
     rewardXP: 45,
     instructions: "Buat rute kabel berliku-liku di papan sirkuit dengan memutar setiap ubin siku!",
+    timeLimit: 30,
   },
   {
     level: 3,
@@ -123,6 +127,7 @@ const LEVEL_CONFIGS: LevelConfig[] = [
     rewardCoins: 100,
     rewardXP: 60,
     instructions: "Waspada ubin jebakan di kanan bawah! Cari rute logis lain yang benar-benar tersambung.",
+    timeLimit: 35,
   },
   {
     level: 4,
@@ -149,6 +154,7 @@ const LEVEL_CONFIGS: LevelConfig[] = [
     rewardCoins: 150,
     rewardXP: 90,
     instructions: "Gunakan pembagi ubin tipe-T 📡! Rencanakan arah aliran sirkuit agar tidak terjebak di cabang mati.",
+    timeLimit: 40,
   },
   {
     level: 5,
@@ -178,6 +184,7 @@ const LEVEL_CONFIGS: LevelConfig[] = [
     rewardCoins: 250,
     rewardXP: 120,
     instructions: "Tantangan Papan Sirkuit Final! Hubungkan jalur kabel tembaga terpanjang dari Robot ke Terminal target.",
+    timeLimit: 45,
   },
 ];
 
@@ -381,6 +388,182 @@ const ConfettiPiece = ({
   );
 };
 
+let audioCtx: AudioContext | null = null;
+const playSynthSound = (type: "connect" | "victory" | "fail") => {
+  if (Platform.OS !== "web") return;
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume();
+    }
+
+    const now = audioCtx.currentTime;
+
+    if (type === "connect") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(1200, now + 0.4);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.4);
+      osc.start(now);
+      osc.stop(now + 0.4);
+    } else if (type === "victory") {
+      const freqs = [523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98, 2093.00];
+      freqs.forEach((freq, idx) => {
+        const osc = audioCtx!.createOscillator();
+        const gain = audioCtx!.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx!.destination);
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(freq, now + idx * 0.08);
+        gain.gain.setValueAtTime(0.15, now + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.08 + 0.35);
+        osc.start(now + idx * 0.08);
+        osc.stop(now + idx * 0.08 + 0.4);
+      });
+    } else if (type === "fail") {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.linearRampToValueAtTime(60, now + 0.6);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.6);
+      osc.start(now);
+      osc.stop(now + 0.6);
+    }
+  } catch (e) {
+    console.warn("Failed to play synth sound:", e);
+  }
+};
+
+const traceConnectionPath = (
+  tiles: Tile[],
+  config: LevelConfig,
+  tileSize: number
+): { x: number; y: number }[] => {
+  const tileMap = new Map<string, Tile>();
+  tiles.forEach((t) => {
+    tileMap.set(`${t.col},${t.row}`, t);
+  });
+
+  const getTile = (c: number, r: number) => tileMap.get(`${c},${r}`);
+  const points: { x: number; y: number }[] = [];
+
+  const generatorY = config.startRow * tileSize + tileSize / 2;
+  points.push({ x: -12, y: generatorY });
+
+  const startTileCenterX = config.startCol * tileSize + tileSize / 2;
+  const startTileCenterY = config.startRow * tileSize + tileSize / 2;
+  let currentX = startTileCenterX;
+  let currentY = startTileCenterY;
+  if (config.startDir === "left") currentX = config.startCol * tileSize;
+  else if (config.startDir === "right") currentX = (config.startCol + 1) * tileSize;
+  else if (config.startDir === "top") currentY = config.startRow * tileSize;
+  else if (config.startDir === "bottom") currentY = (config.startRow + 1) * tileSize;
+
+  points.push({ x: currentX, y: currentY });
+
+  let col = config.startCol;
+  let row = config.startRow;
+  let enterDir = config.startDir;
+  const visited = new Set<string>();
+
+  let loopCount = 0;
+  while (loopCount < 100) {
+    loopCount++;
+    const key = `${col},${row}`;
+    visited.add(key);
+
+    const tile = getTile(col, row);
+    if (!tile) break;
+
+    const tileCenterX = col * tileSize + tileSize / 2;
+    const tileCenterY = row * tileSize + tileSize / 2;
+    points.push({ x: tileCenterX, y: tileCenterY });
+
+    const ports = getTilePorts(tile.type, tile.rotation);
+    if (!ports.includes(enterDir)) break;
+
+    const exitPorts = ports.filter((p) => p !== enterDir);
+    let chosenExit: string | null = null;
+    let nextCol = col;
+    let nextRow = row;
+    let nextEnterDir: "top" | "right" | "bottom" | "left" = "left";
+
+    for (const p of exitPorts) {
+      let nc = col;
+      let nr = row;
+      let targetEnterDir: "top" | "right" | "bottom" | "left" = "left";
+
+      if (p === "top") {
+        nr = row - 1;
+        targetEnterDir = "bottom";
+      } else if (p === "right") {
+        nc = col + 1;
+        targetEnterDir = "left";
+      } else if (p === "bottom") {
+        nr = row + 1;
+        targetEnterDir = "top";
+      } else if (p === "left") {
+        nc = col - 1;
+        targetEnterDir = "right";
+      }
+
+      if (col === config.endCol && row === config.endRow && p === config.endDir) {
+        chosenExit = p;
+        nextCol = nc;
+        nextRow = nr;
+        nextEnterDir = targetEnterDir;
+        break;
+      }
+
+      const neighbor = getTile(nc, nr);
+      if (neighbor && !visited.has(`${nc},${nr}`)) {
+        const neighborPorts = getTilePorts(neighbor.type, neighbor.rotation);
+        if (neighborPorts.includes(targetEnterDir)) {
+          chosenExit = p;
+          nextCol = nc;
+          nextRow = nr;
+          nextEnterDir = targetEnterDir;
+          break;
+        }
+      }
+    }
+
+    if (!chosenExit) break;
+
+    let exitX = tileCenterX;
+    let exitY = tileCenterY;
+    if (chosenExit === "left") exitX = col * tileSize;
+    else if (chosenExit === "right") exitX = (col + 1) * tileSize;
+    else if (chosenExit === "top") exitY = row * tileSize;
+    else if (chosenExit === "bottom") exitY = (row + 1) * tileSize;
+
+    points.push({ x: exitX, y: exitY });
+
+    if (col === config.endCol && row === config.endRow && chosenExit === config.endDir) {
+      const pcY = config.endRow * tileSize + tileSize / 2;
+      points.push({ x: 372, y: pcY });
+      break;
+    }
+
+    col = nextCol;
+    row = nextRow;
+    enterDir = nextEnterDir;
+  }
+
+  return points;
+};
+
 export default function RoboLinkScreen() {
   const router = useRouter();
   const [level, setLevel] = useState(1);
@@ -389,8 +572,12 @@ export default function RoboLinkScreen() {
 
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [timeCounter, setTimeCounter] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(30);
+  const [isAnimatingFinish, setIsAnimatingFinish] = useState(false);
 
   const pulseScale = useSharedValue(1);
+  const pulseProgress = useSharedValue(0);
+  const sharedPoints = useSharedValue<{ x: number; y: number }[]>([]);
 
   const currentConfig = useMemo(() => {
     return LEVEL_CONFIGS.find((l) => l.level === level) || LEVEL_CONFIGS[0];
@@ -428,9 +615,29 @@ export default function RoboLinkScreen() {
     }
   };
 
+  // Timer countdown effect
+  useEffect(() => {
+    if (gameState !== "playing" || isAnimatingFinish) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          playSynthSound("fail");
+          triggerHaptic("error");
+          setGameState("failed");
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [gameState, isAnimatingFinish, level]);
+
   // Clock frame loop
   useEffect(() => {
-    if (gameState !== "playing") return;
+    if (gameState !== "playing" && !isAnimatingFinish) return;
 
     let isRunning = true;
     let frameId: number;
@@ -446,7 +653,7 @@ export default function RoboLinkScreen() {
       isRunning = false;
       cancelAnimationFrame(frameId);
     };
-  }, [gameState, level]);
+  }, [gameState, isAnimatingFinish, level]);
 
   // Load progress
   useEffect(() => {
@@ -485,6 +692,10 @@ export default function RoboLinkScreen() {
     }));
 
     setTiles(initialTiles);
+    setTimeLeft(config.timeLimit || 30);
+    setIsAnimatingFinish(false);
+    pulseProgress.value = 0;
+    sharedPoints.value = [];
     setGameState("playing");
   };
 
@@ -493,9 +704,24 @@ export default function RoboLinkScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [level]);
 
+  const handleFinishTransition = () => {
+    playSynthSound("victory");
+    triggerHaptic("success");
+    pulseScale.value = withSequence(withTiming(1.2, { duration: 150 }), withTiming(1, { duration: 180 }));
+    
+    setTimeout(() => {
+      if (level < LEVEL_CONFIGS.length) {
+        setGameState("victory");
+      } else {
+        setGameState("completed");
+      }
+      setIsAnimatingFinish(false);
+    }, 450);
+  };
+
   // Handle tile rotaton clicks
   const handleTilePress = (tileId: string) => {
-    if (gameState !== "playing") return;
+    if (gameState !== "playing" || isAnimatingFinish) return;
     triggerHaptic("light");
 
     setTiles((prevTiles) => {
@@ -519,18 +745,16 @@ export default function RoboLinkScreen() {
       );
 
       if (isTargetConnected) {
-        setTimeout(() => {
-          triggerHaptic("success");
-          pulseScale.value = withSequence(withTiming(1.1, { duration: 120 }), withTiming(1, { duration: 150 }));
-          
-          setTimeout(() => {
-            if (level < LEVEL_CONFIGS.length) {
-              setGameState("victory");
-            } else {
-              setGameState("completed");
-            }
-          }, 1000);
-        }, 150);
+        playSynthSound("connect");
+        const path = traceConnectionPath(nextTiles, currentConfig, tileSize);
+        sharedPoints.value = path;
+        setIsAnimatingFinish(true);
+        pulseProgress.value = 0;
+        pulseProgress.value = withTiming(1, { duration: 1500 }, (finished) => {
+          if (finished) {
+            runOnJS(handleFinishTransition)();
+          }
+        });
       }
 
       return nextTiles;
@@ -568,10 +792,72 @@ export default function RoboLinkScreen() {
   };
 
   const isBlinking = (timeCounter % 60) < 30;
+  const isEnergyDelivered = gameState === "victory" || gameState === "completed";
 
   const targetAnimatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pulseScale.value }],
   }));
+
+  const pulseAnimatedStyle = useAnimatedStyle(() => {
+    const points = sharedPoints.value;
+    if (!points || points.length === 0) {
+      return {
+        opacity: 0,
+        transform: [{ translateX: 0 }, { translateY: 0 }],
+      };
+    }
+
+    const p = pulseProgress.value;
+    if (p <= 0) {
+      return {
+        opacity: 1,
+        transform: [{ translateX: points[0].x - 10 }, { translateY: points[0].y - 10 }],
+      };
+    }
+    if (p >= 1) {
+      const lastPoint = points[points.length - 1];
+      return {
+        opacity: 1,
+        transform: [{ translateX: lastPoint.x - 10 }, { translateY: lastPoint.y - 10 }],
+      };
+    }
+
+    let totalLength = 0;
+    const segmentLengths = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const dx = points[i + 1].x - points[i].x;
+      const dy = points[i + 1].y - points[i].y;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      segmentLengths.push(len);
+      totalLength += len;
+    }
+
+    const targetDist = p * totalLength;
+    let accumulatedDist = 0;
+    let x = points[0].x;
+    let y = points[0].y;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const len = segmentLengths[i];
+      if (targetDist <= accumulatedDist + len) {
+        const segProgress = (targetDist - accumulatedDist) / len;
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        x = p1.x + (p2.x - p1.x) * segProgress;
+        y = p1.y + (p2.y - p1.y) * segProgress;
+        break;
+      }
+      accumulatedDist += len;
+    }
+
+    return {
+      opacity: 1,
+      transform: [
+        { translateX: x - 10 },
+        { translateY: y - 10 },
+      ],
+    };
+  });
 
   // Dynamic Tile size based on grid columns
   const tileSize = 360 / currentConfig.cols;
@@ -594,7 +880,7 @@ export default function RoboLinkScreen() {
 
       {/* HEADER HUD BAR */}
       <View style={styles.header}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Pressable
             onPress={() => {
               triggerHaptic("light");
@@ -605,21 +891,14 @@ export default function RoboLinkScreen() {
             <Ionicons name="arrow-back" size={20} color="#0F766E" />
           </Pressable>
 
-          <View style={styles.heartsRow}>
-            {/* Lives are kept static/full since rotate connection doesn't penalize trials */}
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Ionicons
-                key={i}
-                name="heart"
-                size={22}
-                color="#EF4444"
-                style={{ marginRight: 2 }}
-              />
-            ))}
+          {/* TIMER BADGE */}
+          <View style={[styles.timerBadge, timeLeft <= 10 && styles.timerBadgeUrgent]}>
+            <Ionicons name="time" size={16} color={timeLeft <= 10 ? "#EF4444" : "#0D9488"} />
+            <Text style={[styles.timerText, timeLeft <= 10 && styles.timerTextUrgent]}>{timeLeft}s</Text>
           </View>
         </View>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
           <View style={styles.levelBadge}>
             <Text style={styles.levelBadgeText}>Level {level}</Text>
           </View>
@@ -632,9 +911,22 @@ export default function RoboLinkScreen() {
         </View>
 
         <View style={styles.coinsHeaderBadge}>
-          <MaterialCommunityIcons name="coin" size={18} color="#D97706" />
+          <MaterialCommunityIcons name={"coin" as any} size={18} color="#D97706" />
           <Text style={styles.coinsHeaderVal}>{userCoins}</Text>
         </View>
+      </View>
+
+      {/* TIMER PROGRESS BAR */}
+      <View style={styles.timerProgressContainer}>
+        <View
+          style={[
+            styles.timerProgressBar,
+            {
+              width: `${(timeLeft / (currentConfig.timeLimit || 30)) * 100}%`,
+              backgroundColor: timeLeft <= 10 ? "#EF4444" : "#10B981",
+            },
+          ]}
+        />
       </View>
 
       {/* HAZARD TAPE ACCENTS */}
@@ -700,7 +992,7 @@ export default function RoboLinkScreen() {
             <Animated.View
               style={[
                 styles.targetNodeContainer,
-                connectivity.isTargetConnected && targetAnimatedStyle,
+                isEnergyDelivered && targetAnimatedStyle,
                 { left: pcPosition.x, top: pcPosition.y },
               ]}
             >
@@ -708,12 +1000,12 @@ export default function RoboLinkScreen() {
                 style={[
                   styles.pcMonitor,
                   {
-                    backgroundColor: connectivity.isTargetConnected ? "#10B981" : "#475569",
-                    borderColor: connectivity.isTargetConnected ? "#A7F3D0" : "#64748B",
+                    backgroundColor: isEnergyDelivered ? "#10B981" : "#475569",
+                    borderColor: isEnergyDelivered ? "#A7F3D0" : "#64748B",
                   },
                 ]}
               >
-                {connectivity.isTargetConnected ? (
+                {isEnergyDelivered ? (
                   <>
                     <MaterialCommunityIcons name="lan-connect" size={14} color="#FFFFFF" />
                     <Text style={styles.pcFaceText}>(^.^)</Text>
@@ -738,6 +1030,15 @@ export default function RoboLinkScreen() {
                 <Text style={styles.nodeLabelText}>PC TARGET</Text>
               </View>
             </Animated.View>
+
+            {isAnimatingFinish && (
+              <Animated.View
+                style={[
+                  styles.energyPulse,
+                  pulseAnimatedStyle,
+                ]}
+              />
+            )}
 
             {/* Grid Arena */}
             {/* Grid Arena */}
@@ -797,7 +1098,7 @@ export default function RoboLinkScreen() {
                   y1={currentConfig.endRow * tileSize + tileSize / 2}
                   x2={372}
                   y2={currentConfig.endRow * tileSize + tileSize / 2}
-                  stroke={connectivity.isTargetConnected ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
+                  stroke={isEnergyDelivered ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
                   strokeWidth={8}
                   strokeLinecap="round"
                 />
@@ -806,7 +1107,7 @@ export default function RoboLinkScreen() {
                   y1={currentConfig.endRow * tileSize + tileSize / 2}
                   x2={372}
                   y2={currentConfig.endRow * tileSize + tileSize / 2}
-                  stroke={connectivity.isTargetConnected ? "#F97316" : "#475569"}
+                  stroke={isEnergyDelivered ? "#F97316" : "#475569"}
                   strokeWidth={4}
                   strokeLinecap="round"
                 />
@@ -830,6 +1131,8 @@ export default function RoboLinkScreen() {
                             stroke={isPowered ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
                             strokeWidth={8}
                             strokeLinecap="round"
+                            strokeDasharray={isPowered ? [10, 8] : undefined}
+                            strokeDashoffset={isPowered ? -timeCounter * 1.5 : undefined}
                           />
                           <Line
                             x1={cx - half}
@@ -851,6 +1154,8 @@ export default function RoboLinkScreen() {
                             stroke={isPowered ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
                             strokeWidth={8}
                             strokeLinecap="round"
+                            strokeDasharray={isPowered ? [10, 8] : undefined}
+                            strokeDashoffset={isPowered ? -timeCounter * 1.5 : undefined}
                           />
                           <Path
                             d={`M ${cx} ${cy + half} Q ${cx} ${cy} ${cx + half} ${cy}`}
@@ -872,6 +1177,8 @@ export default function RoboLinkScreen() {
                             stroke={isPowered ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
                             strokeWidth={8}
                             strokeLinecap="round"
+                            strokeDasharray={isPowered ? [10, 8] : undefined}
+                            strokeDashoffset={isPowered ? -timeCounter * 1.5 : undefined}
                           />
                           <Line
                             x1={cx}
@@ -881,6 +1188,8 @@ export default function RoboLinkScreen() {
                             stroke={isPowered ? "#FBBF24" : "rgba(251, 191, 36, 0.16)"}
                             strokeWidth={8}
                             strokeLinecap="round"
+                            strokeDasharray={isPowered ? [10, 8] : undefined}
+                            strokeDashoffset={isPowered ? -timeCounter * 1.5 : undefined}
                           />
                           <Line
                             x1={cx - half}
@@ -968,7 +1277,7 @@ export default function RoboLinkScreen() {
             <View style={styles.rewardSummary}>
               <Text style={styles.rewardLabel}>HADIAH</Text>
               <View style={styles.rewardBadge}>
-                <MaterialCommunityIcons name="coin" size={20} color="#F59E0B" />
+                <MaterialCommunityIcons name={"coin" as any} size={20} color="#F59E0B" />
                 <Text style={styles.rewardBadgeText}>+{currentConfig.rewardCoins} Koin</Text>
               </View>
             </View>
@@ -996,7 +1305,7 @@ export default function RoboLinkScreen() {
             <View style={styles.rewardSummary}>
               <Text style={styles.rewardLabel}>HADIAH TOTAL</Text>
               <View style={styles.rewardBadge}>
-                <MaterialCommunityIcons name="coin" size={20} color="#F59E0B" />
+                <MaterialCommunityIcons name={"coin" as any} size={20} color="#F59E0B" />
                 <Text style={styles.rewardBadgeText}>+{currentConfig.rewardCoins} Koin</Text>
               </View>
             </View>
@@ -1004,6 +1313,26 @@ export default function RoboLinkScreen() {
             <Button
               title="Klaim Hadiah & Selesai"
               onPress={handleClaimAndExit}
+              variant="primary"
+              style={{ width: "100%" }}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* FAILED MODAL OVERLAY */}
+      <Modal visible={gameState === "failed"} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={[styles.victoryIconCircle, { backgroundColor: "#FEF2F2" }]}>
+              <Ionicons name="alert-circle" size={50} color="#EF4444" />
+            </View>
+            <Text style={styles.modalTitle}>WAKTU HABIS!</Text>
+            <Text style={styles.modalSubtitle}>Sirkuit gagal tersambung dalam batas waktu. Jangan menyerah, coba lagi!</Text>
+
+            <Button
+              title="Coba Lagi"
+              onPress={handleRestartLevel}
               variant="primary"
               style={{ width: "100%" }}
             />
@@ -1307,7 +1636,7 @@ const styles = StyleSheet.create({
   },
   pcFaceText: {
     fontSize: 7,
-    fontWeight: "950",
+    fontWeight: "900",
     color: "#FFFFFF",
   },
   pcStand: {
@@ -1480,5 +1809,51 @@ const styles = StyleSheet.create({
     ...FONTS.bodyBold,
     fontSize: 16,
     color: "#D97706",
+  },
+  timerProgressContainer: {
+    height: 4,
+    backgroundColor: "#E2E8F0",
+    width: "100%",
+  },
+  timerProgressBar: {
+    height: "100%",
+  },
+  timerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1.5,
+    borderColor: "#FFEDD5",
+    borderRadius: SHAPES.radiusRound,
+    paddingVertical: 4,
+    paddingHorizontal: SPACING.md,
+    gap: 4,
+  },
+  timerBadgeUrgent: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+  },
+  timerText: {
+    ...FONTS.bodyBold,
+    fontSize: 13,
+    color: "#C2410C",
+  },
+  timerTextUrgent: {
+    color: "#EF4444",
+  },
+  energyPulse: {
+    position: "absolute",
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#FBBF24",
+    borderWidth: 2.5,
+    borderColor: "#FFFFFF",
+    zIndex: 50,
+    shadowColor: "#F59E0B",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 8,
+    elevation: 8,
   },
 });
