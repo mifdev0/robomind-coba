@@ -1031,18 +1031,17 @@ export default function RoboLinkScreen() {
               </View>
             </Animated.View>
 
-            {isAnimatingFinish && (
-              <Animated.View
-                style={[
-                  styles.energyPulse,
-                  pulseAnimatedStyle,
-                ]}
-              />
-            )}
-
             {/* Grid Arena */}
             {/* Grid Arena */}
             <View style={styles.gameArena}>
+              {isAnimatingFinish && (
+                <Animated.View
+                  style={[
+                    styles.energyPulse,
+                    pulseAnimatedStyle,
+                  ]}
+                />
+              )}
               {tiles.map((tile) => {
                 const leftPos = tile.col * tileSize;
                 const topPos = tile.row * tileSize;
@@ -1548,6 +1547,7 @@ const styles = StyleSheet.create({
     borderColor: "#0F766E",
     borderWidth: 5,
     borderRadius: 12,
+    overflow: "visible",
     ...SHADOWS.medium,
   },
   sourceRobotNode: {
@@ -1843,6 +1843,8 @@ const styles = StyleSheet.create({
   },
   energyPulse: {
     position: "absolute",
+    left: 0,
+    top: 0,
     width: 20,
     height: 20,
     borderRadius: 10,
